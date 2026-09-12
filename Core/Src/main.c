@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,28 +38,23 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-//滤波器编号
-#define CAN_FILTER(x) ((x) <<3)
-//FIFO选择
-#define CAN_FIFO_0 (0 <<2)
-#define CAN_FIFO_1 (1 <<2)
-//标准帧标志
-#define CAN_STDID (0 <<1)
-#define CAN_EXTID (1 <<1)
-//数据帧标志
-#define CAN_DATA_TYPE (0 <<0)
-#define CAN_REMOTE_TYPE (1 <<0)
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 
-uint8_t FDCAN_0x1ff_Tx_Data[8];
+
 uint8_t FDCAN_0x200_Tx_Data[8];
 uint8_t FDCAN_0x2ff_Tx_Data[8];
 
-
+volatile uint16_t Motor_ecd;
+volatile int16_t  Motor_speed;
+volatile int16_t  Motor_current;
+volatile uint8_t  Motor_temp;
+volatile uint8_t  Motor_online;
+volatile int16_t   test_CURRENT = 1000;
 
 
 /* USER CODE END PV */
@@ -73,16 +68,15 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void CAN_Init(FDCAN_HandleTypeDef* hcan) {
-  HAL_FDCAN_Start(hcan);
-  __HAL_FDCAN_ENABLE_IT(hcan,FDCAN_IT_GROUP_RX_FIFO0);
-  __HAL_FDCAN_ENABLE_IT(hcan,FDCAN_IT_GROUP_RX_FIFO1);
+void CAN_Init(FDCAN_HandleTypeDef* hfdcan1) {
+  HAL_FDCAN_Start(hfdcan1);
+  HAL_FDCAN_ActivateNotification(hfdcan1,FDCAN_IT_RX_FIFO0_NEW_MESSAGE,0);
 
 
 
 }
 
-void CAN_FilterInit(FDCAN_HandleTypeDef* hcan,uint32_t can_filter_id,uint32_t can_filter_mask,uint8_t Object) {
+void CAN_FilterInit(FDCAN_HandleTypeDef* hcan,uint32_t can_filter_id,uint32_t can_filter_mask) {
   FDCAN_FilterTypeDef CAN_Filter_InitStruct;
   CAN_Filter_InitStruct.IdType = FDCAN_STANDARD_ID;
   CAN_Filter_InitStruct.FilterType = FDCAN_FILTER_MASK;
@@ -96,7 +90,6 @@ void CAN_FilterInit(FDCAN_HandleTypeDef* hcan,uint32_t can_filter_id,uint32_t ca
 
 uint8_t CAN_Transmit(FDCAN_HandleTypeDef* hcan,uint32_t can_id,uint8_t *Data,uint16_t Length) {
   FDCAN_TxHeaderTypeDef txheader;
-  uint32_t TxMailbox;
 
   txheader.Identifier = can_id;
   txheader.IdType = FDCAN_STANDARD_ID;
@@ -110,12 +103,21 @@ uint8_t CAN_Transmit(FDCAN_HandleTypeDef* hcan,uint32_t can_id,uint8_t *Data,uin
   return  (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1,&txheader,Data));
 
 
-
-
 }
 
+void CAN_MotorEnable(FDCAN_HandleTypeDef* hcan, uint8_t enable)
+{
+  memset(FDCAN_0x2ff_Tx_Data, 0, 8);
+  FDCAN_0x2ff_Tx_Data[0] = enable ? 0xFF : 0x00;
+  CAN_Transmit(hcan, 0x2FF, FDCAN_0x2ff_Tx_Data, 8);
+}
 
-
+void CAN_CURRENT(FDCAN_HandleTypeDef* hcan, int16_t current) {
+  memset(FDCAN_0x200_Tx_Data, 0, 8);
+  FDCAN_0x200_Tx_Data[6] = (uint8_t)(current>>8);
+  FDCAN_0x200_Tx_Data[7] = (uint8_t)(current&0xFF);
+  CAN_Transmit(hcan, 0x200, FDCAN_0x200_Tx_Data, 8);
+}
 
 
 /* USER CODE END 0 */
@@ -151,16 +153,23 @@ int main(void)
   MX_GPIO_Init();
   MX_FDCAN1_Init();
   /* USER CODE BEGIN 2 */
-
+  CAN_FilterInit(&hfdcan1, 0x204, 0x7FF);
+  CAN_Init(&hfdcan1);
+  CAN_MotorEnable(&hfdcan1, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    // HAL_GPIO_TogglePin(GPIOE,GPIO_PIN_12);
+    // HAL_GPIO_TogglePin(GPIOE,GPIO_PIN_13);
+    // HAL_Delay(500);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    CAN_CURRENT(&hfdcan1, test_CURRENT);
+    HAL_Delay(1);
   }
   /* USER CODE END 3 */
 }
@@ -176,15 +185,16 @@ void SystemClock_Config(void)
 
   /** Configure the main internal regulator output voltage
   */
-  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
   RCC_OscInitStruct.PLL.PLLN = 20;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
@@ -204,13 +214,36 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
     Error_Handler();
   }
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef* hfdcan, uint32_t RxFifo0ITs) {
+  FDCAN_RxHeaderTypeDef rxHeader;
+  uint8_t rxData[8];
+
+  while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0)
+  {
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+    {
+      break;
+    }
+
+    if (rxHeader.Identifier != 0x204) continue;
+
+    Motor_ecd     = (uint16_t)((rxData[0] << 8) | rxData[1]);
+    Motor_speed   = (int16_t) ((rxData[2] << 8) | rxData[3]);
+    Motor_current = (int16_t) ((rxData[4] << 8) | rxData[5]);
+    Motor_temp    = rxData[6];
+    Motor_online  = 1;
+  }
+}
+
+
 
 
 
